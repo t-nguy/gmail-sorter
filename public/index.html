@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Gmail Sorter</title>
+    <meta charset="utf-8" />
+  </head>
+  <body>
+    <p>Gmail Sorter</p>
+
+    <!--Add buttons to initiate auth sequence and sign out-->
+    <button id="authorize_button" onclick="handleAuthClick()">Authorize</button>
+    <button id="signout_button" onclick="handleSignoutClick()">Sign Out</button>
+
+    <pre id="content" style="white-space: pre-wrap;"></pre>
+    <pre id="progress" style="white-space: pre-wrap;"></pre>
+    <pre id="progress2" style="white-space: pre-wrap;"></pre>
+    <pre id="content2" style="white-space: pre-wrap;"></pre>
+
+    <script type="text/javascript">
+      /* exported gapiLoaded */
+      /* exported gisLoaded */
+      /* exported handleAuthClick */
+      /* exported handleSignoutClick */
+        const queue = () => {
+            const a = [], b = [];
+            return {
+                push: (obj) => a.push(obj),
+                shift: () => {
+                    if (b.length === 0) {
+                        while (a.length > 0) { b.push(a.pop()) }
+                    }
+                    return b.pop();
+                },
+                get length() { return a.length + b.length }
+        }
+}
+    
+
+      // TODO(developer): Set to client ID and API key from the Developer Console
+      const CLIENT_ID = '946185174487-faeq1020t254ji2ot7s5vbhpqi47g8te.apps.googleusercontent.com';
+      const API_KEY = 'AIzaSyCdxXPEZFssZAuGxUhS0Th_r0rR9_BZYms';
+
+      // Discovery doc URL for APIs used by the quickstart
+      const DISCOVERY_DOCS = ['https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest',
+                             'https://www.googleapis.com/discovery/v1/apis/people/v1/rest']
+
+      // Authorization scopes required by the API; multiple scopes can be
+      // included, separated by spaces.
+      const SCOPES = 'https://mail.google.com/' + ' ' + 'https://www.googleapis.com/auth/profile.emails.read' + ' '
+                      'https://www.googleapis.com/auth/user.emails.read' + ' ' + 'https://www.googleapis.com/auth/userinfo.profile';
+
+      var ids = []
+      var batchSize = 10;
+      var batchIndex = 0;
+
+      var idQueue = queue();
+    
+      let tokenClient;
+      let gapiInited = false;
+      let gisInited = false;
+
+      var name, email;
+      var allEmailsIndexed = false;
+
+      document.getElementById('authorize_button').style.visibility = 'hidden';
+      document.getElementById('signout_button').style.visibility = 'hidden';
+
+      /**
+       * Callback after api.js is loaded.
+       */
+      function gapiLoaded() {
+        gapi.load('client', initializeGapiClient);
+      }
+
+      /**
+       * Callback after the API client is loaded. Loads the
+       * discovery doc to initialize the API.
+       */
+      async function initializeGapiClient() {
+        var user = await gapi.client.init({
+          apiKey: API_KEY,
+          discoveryDocs: DISCOVERY_DOCS,
+        });
+        
+        gapiInited = true;
+        
+        maybeEnableButtons();
+      }
+
+      /**
+       * Callback after Google Identity Services are loaded.
+       */
+      function gisLoaded() {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID,
+          scope: SCOPES,
+          callback: '', // defined later
+        });
+        gisInited = true;
+        
+        maybeEnableButtons();
+      }
+
+      /**
+       * Enables user interaction after all libraries are loaded.
+       */
+      function maybeEnableButtons() {
+        if (gapiInited && gisInited) {
+          document.getElementById('authorize_button').style.visibility = 'visible';
+        }
+      }
+
+      /**
+       *  Sign in the user upon button click.
+       */
+      function handleAuthClick() {
+        tokenClient.callback = async (resp) => {
+          if (resp.error !== undefined) {
+            throw (resp);
+          }
+          document.getElementById('signout_button').style.visibility = 'visible';
+          document.getElementById('authorize_button').innerText = 'Refresh';
+          //loadEmails();
+          //getEmails();
+          getEmailIds();
+        };
+
+        if (gapi.client.getToken() === null) {
+          // Prompt the user to select a Google Account and ask for consent to share their data
+          // when establishing a new session.
+          tokenClient.requestAccessToken({prompt: 'consent'});
+        } else {
+          // Skip display of account chooser and consent dialog for an existing session.
+          tokenClient.requestAccessToken({prompt: ''});
+        }
+      }
+
+      /**
+       *  Sign out the user upon button click.
+       */
+      function handleSignoutClick() {
+        const token = gapi.client.getToken();
+        console.log('Token: ' + JSON.stringify(token))
+        if (token !== null) {
+          google.accounts.oauth2.revoke(token.access_token);
+          gapi.client.setToken('');
+          document.getElementById('content').innerText = '';
+          document.getElementById('authorize_button').innerText = 'Authorize';
+          document.getElementById('signout_button').style.visibility = 'hidden';
+        }
+      }
+
+    async function loadEmails(){
+        
+    }
+
+    async function getEmailIds() {
+        return new Promise((resolve, reject) => {
+            (async () => {
+                var profile = await gapi.client.people.people.get({
+                    'resourceName': 'people/me',
+                    'personFields': 'names,emailAddresses'
+                })
+
+                name = profile.result.names[0].displayName;
+                email = profile.result.emailAddresses[0].value;
+                var nextPageToken;
+                var pageIters = 0;
+                var pageSize = 500;
+
+                document.getElementById('content').innerText += 'Welcome ' + name + '. Loading emails from ' + email + '.\n';
+
+                do {
+                    try {
+                        response = await gapi.client.gmail.users.messages.list({
+                            'userId': email,
+                            'maxResults': pageSize,
+                            'pageToken': nextPageToken
+                        });
+                    } catch(err) {
+                        document.getElementById('content').innerText = err.message;
+                        reject();
+                    }
+
+                    const emailIds = response.result.messages;
+                    nextPageToken = response.result.nextPageToken;
+                
+                    if (!emailIds || emailIds.length == 0) {
+                        document.getElementById('content').innerText = 'No emails found.';
+                        reject();
+                    }
+
+                    //ids = ids.concat(emailIds)
+                    var i = 0;
+                    for (var emailId of emailIds){
+                        //idQueue.push(emailId.id)
+                        try {
+                            gapi.client.gmail.users.messages.get({
+                                'userId': email,
+                                'id': emailId.id
+                            }).then((res) => {
+                                i++;
+                                document.getElementById('progress2').innerText = i + ' emails processed.'
+                            })
+                        }
+                        catch(err){
+                            reject(err);
+                        }
+                    }
+                    pageIters += emailIds.length;
+                    document.getElementById('progress').innerText = pageIters + ' emails indexed.'
+                } while(typeof nextPageToken !== 'undefined');
+
+                allEmailsIndexed = true;
+                resolve();
+            })()
+        })
+
+        
+    }
+
+
+    /**
+     * Print metadata for first 10 files.
+     */
+    async function getEmails() {
+        
+        return new Promise((resolve, reject) => {
+            console.log('Getting emails')
+            var iters = 0;
+            //console.log('idqueue lengtH: ' + idQueue.length)
+            while(!allEmailsIndexed){
+                //console.log('idqueue lengtH: ' + idQueue.length)\
+                if(idQueue.length > 0){
+                    var id = idQueue.shift()
+                    try {
+                        gapi.client.gmail.users.messages.get({
+                            'userId': email,
+                            'id': id
+                        }).then((res) => {
+                            iters++;
+                            document.getElementById('progress2').innerText = iters + ' emails processed.'
+                        })
+                    }
+                    catch(err){
+                        reject(err);
+                    }
+                }
+                else {  
+                    setTimeout(() => {
+                        console.log('No ids available.')
+                    }, 1000)
+                }
+               
+            }
+            resolve();
+        })
+        
+
+    }
+    </script>
+    <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
+    <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+  </body>
+</html>
